@@ -256,8 +256,12 @@ module.exports = (Commands, Cypress, cy, state, config) ->
 
     fn()
 
-  requestUrl = (url) ->
-    Cypress.backend("resolve:url", url)
+  requestUrl = (url, options = {}) ->
+    Cypress.backend(
+      "resolve:url",
+      url,
+      _.pick(options, "failOnStatusCode", "auth")
+    )
     .then (resp = {}) ->
       switch
         ## if we didn't even get an OK response
@@ -455,11 +459,14 @@ module.exports = (Commands, Cypress, cy, state, config) ->
       if not _.isString(url)
         $utils.throwErrByPath("visit.invalid_1st_arg")
 
-      _.defaults options,
+      _.defaults(options, {
+        auth: null
+        failOnStatusCode: true
         log: true
         timeout: config("pageLoadTimeout")
         onBeforeLoad: ->
         onLoad: ->
+      })
 
       consoleProps = {}
 
@@ -536,9 +543,14 @@ module.exports = (Commands, Cypress, cy, state, config) ->
 
         remote = $Location.create(remoteUrl ? url)
 
+        ## reset auth options if we have them
+        if a = remote.authObj
+          options.auth = a
+
         ## store the existing hash now since
         ## we'll need to apply it later
         existingHash = remote.hash ? ""
+        existingAuth = remote.auth ? ""
 
         if previousDomainVisited and remote.originPolicy isnt existing.originPolicy
           ## if we've already visited a new superDomain
@@ -560,7 +572,11 @@ module.exports = (Commands, Cypress, cy, state, config) ->
           ## before telling our backend to resolve this url
           url = url.replace(existingHash, "")
 
-        requestUrl(url)
+        if existingAuth
+          ## strip out the existing url if we have one
+          url = url.replace(existingAuth + "@", "")
+
+        requestUrl(url, options)
         .then (resp = {}) =>
           {url, originalUrl, cookies, redirects, filePath} = resp
 

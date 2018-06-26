@@ -1,15 +1,17 @@
 _             = require("lodash")
 EE            = require("events")
 Promise       = require("bluebird")
+debug         = require("debug")("cypress:server:browsers:electron")
+plugins       = require("../plugins")
 menu          = require("../gui/menu")
 Windows       = require("../gui/windows")
 savedState    = require("../saved_state")
 
 module.exports = {
-  _defaultOptions: (state, options) ->
+  _defaultOptions: (projectRoot, state, options) ->
     _this = @
 
-    _.defaults({}, options, {
+    defaults = {
       x: state.browserX
       y: state.browserY
       width: state.browserWidth or 1280
@@ -30,27 +32,27 @@ module.exports = {
       onNewWindow: (e, url) ->
         _win = @
 
-        _this._launchChild(e, url, _win, state, options)
+        _this._launchChild(e, url, _win, projectRoot, state, options)
         .then (child) ->
           ## close child on parent close
           _win.on "close", ->
             if not child.isDestroyed()
               child.close()
-    })
+    }
 
-  _render: (url, state, options = {}) ->
-    options = @_defaultOptions(state, options)
+    _.defaultsDeep({}, options, defaults)
 
-    win = Windows.create(options)
+  _render: (url, projectRoot, options = {}) ->
+    win = Windows.create(projectRoot, options)
 
     @_launch(win, url, options)
 
-  _launchChild: (e, url, parent, state, options) ->
+  _launchChild: (e, url, parent, projectRoot, state, options) ->
     e.preventDefault()
 
     [parentX, parentY] = parent.getPosition()
 
-    options = @_defaultOptions(state, options)
+    options = @_defaultOptions(projectRoot, state, options)
 
     _.extend(options, {
       x: parentX + 100
@@ -59,7 +61,7 @@ module.exports = {
       onPaint: null ## dont capture paint events
     })
 
-    win = Windows.create(options)
+    win = Windows.create(projectRoot, options)
 
     ## needed by electron since we prevented default and are creating
     ## our own BrowserWindow (https://electron.atom.io/docs/api/web-contents/#event-new-window)
@@ -70,13 +72,33 @@ module.exports = {
   _launch: (win, url, options) ->
     menu.set({withDevTools: true})
 
+    debug("launching browser window to url %s with options %o", url, options)
+
     Promise
     .try =>
-      if ps = options.proxyServer
-        @_setProxy(win.webContents, ps)
+      if ua = options.userAgent
+        @_setUserAgent(win.webContents, ua)
+
+      setProxy = =>
+        if ps = options.proxyServer
+          @_setProxy(win.webContents, ps)
+
+      Promise.join(
+        setProxy(),
+        @_clearCache(win.webContents)
+      )
     .then ->
       win.loadURL(url)
     .return(win)
+
+  _clearCache: (webContents) ->
+    new Promise (resolve) ->
+      webContents.session.clearCache(resolve)
+
+  _setUserAgent: (webContents, userAgent) ->
+    ## set both because why not
+    webContents.setUserAgent(userAgent)
+    webContents.session.setUserAgent(userAgent)
 
   _setProxy: (webContents, proxyServer) ->
     new Promise (resolve) ->
@@ -85,12 +107,37 @@ module.exports = {
       }, resolve)
 
   open: (browserName, url, options = {}, automation) ->
-    savedState(options.projectPath)
+    { projectRoot, isTextTerminal } = options
+
+    savedState(projectRoot, isTextTerminal)
     .then (state) ->
       state.get()
     .then (state) =>
-      @_render(url, state, options)
+      ## get our electron default options
+      options = @_defaultOptions(projectRoot, state, options)
+
+      ## get the GUI window defaults now
+      options = Windows.defaults(options)
+
+      Promise
+      .try =>
+        ## bail if we're not registered to this event
+        return options if not plugins.has("before:browser:launch")
+
+        plugins.execute("before:browser:launch", options.browser, options)
+        .then (newOptions) ->
+          if newOptions
+            _.extend(options, newOptions)
+
+          return options
+    .then (options) =>
+      @_render(url, projectRoot, options)
       .then (win) =>
+        ## cause the webview to receive focus so that
+        ## native browser focus + blur events fire correctly
+        ## https://github.com/cypress-io/cypress/issues/1939
+        win.focusOnWebView()
+
         a = Windows.automation(win)
 
         invoke = (method, data) =>
@@ -125,6 +172,8 @@ module.exports = {
         events = new EE
 
         win.once "closed", ->
+          debug("closed event fired")
+
           call("removeAllListeners")
           events.emit("exit")
 

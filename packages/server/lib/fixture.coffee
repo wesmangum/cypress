@@ -1,16 +1,11 @@
 _         = require("lodash")
-fs        = require("fs-extra")
 path      = require("path")
 check     = require("syntax-error")
 coffee    = require("../../../packages/coffee")
 Promise   = require("bluebird")
 jsonlint  = require("jsonlint")
-beautify  = require("js-beautify").html
-pretty    = require("js-object-pretty-print").pretty
-formatter = require("jsonlint/lib/formatter").formatter
 cwd       = require("./cwd")
-
-fs = Promise.promisifyAll(fs)
+fs        = require("./util/fs")
 
 extensions = ".json .js .coffee .html .txt .csv .png .jpg .jpeg .gif .tif .tiff .zip".split(" ")
 
@@ -18,6 +13,10 @@ queue = {}
 
 lastCharacterIsNewLine = (str) ->
   str[str.length - 1] is "\n"
+
+friendlyJsonParse = (s) ->
+  jsonlint.parse(s) # might throw good error
+  JSON.parse(s) # actually parses correctly all the edge cases
 
 module.exports = {
   get: (fixturesFolder, filePath, options = {}) ->
@@ -90,22 +89,7 @@ module.exports = {
   parseJson: (p, fixture) ->
     fs.readFileAsync(p, "utf8")
     .bind(@)
-    .then (str) ->
-      ## format the json
-      formatted = formatter.formatJson(str, "  ")
-
-      ## if we didnt change then return the str
-      if formatted is str
-        return str
-      else
-        ## if last character is a new line
-        ## then append this to the formatted str
-        if lastCharacterIsNewLine(str)
-          formatted += "\n"
-        ## write the file back even if there were errors
-        ## so we write back the formatted version of the str
-        fs.writeFileAsync(p, formatted).return(formatted)
-    .then(jsonlint.parse)
+    .then(friendlyJsonParse)
     .catch (err) ->
       throw new Error("'#{fixture}' is not valid JSON.\n#{err.message}")
 
@@ -121,9 +105,6 @@ module.exports = {
         throw e
 
       return obj
-    .then (obj) ->
-      str = pretty(obj, 2)
-      fs.writeFileAsync(p, str).return(obj)
     .catch (err) ->
       throw new Error("'#{fixture}' is not a valid JavaScript object.#{err.toString()}")
 
@@ -137,9 +118,6 @@ module.exports = {
     .then (str) ->
       str = coffee.compile(str, {bare: true})
       eval(str)
-    .then (obj) ->
-      str = pretty(obj, 2)
-      fs.writeFileAsync(p, str).return(obj)
     .catch (err) ->
       throw new Error("'#{fixture} is not a valid CoffeeScript object.\n#{err.toString()}")
     .finally ->
@@ -148,16 +126,6 @@ module.exports = {
   parseHtml: (p, fixture) ->
     fs.readFileAsync(p, "utf8")
     .bind(@)
-    .then (str) ->
-      html = beautify str, {
-        indent_size: 2
-        extra_liners: []
-      }
-
-      if lastCharacterIsNewLine(str)
-        html += "\n"
-
-      fs.writeFileAsync(p, html).return(html)
 
   parse: (p, fixture, encoding = "utf8") ->
     fs.readFileAsync(p, encoding)

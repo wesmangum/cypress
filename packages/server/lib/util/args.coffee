@@ -5,10 +5,11 @@ coerce   = require("./coerce")
 config   = require("../config")
 cwd      = require("../cwd")
 
-whitelist = "appPath execPath apiKey smokeTest getKey generateKey runProject project spec ci record updating ping key logs clearLogs returnPkg version mode autoOpen removeIds headed config exitWithCode hosts browser headless outputPath group groupId".split(" ")
-whitelist = whitelist.concat(config.getConfigKeys())
-
+nestedObjectsInCurlyBracesRe = /\{(.+?)\}/g
+nestedArraysInSquareBracketsRe = /\[(.+?)\]/g
 everythingAfterFirstEqualRe = /=(.+)/
+
+whitelist = "cwd appPath execPath apiKey smokeTest getKey generateKey runProject project spec reporter reporterOptions port env ci record updating ping key logs clearLogs returnPkg version mode headed config exit exitWithCode browser runMode outputPath parallel parallelId".split(" ")
 
 # returns true if the given string has double quote character "
 # only at the last position.
@@ -29,7 +30,7 @@ normalizeBackslashes = (options) ->
   ## remove stray double quote from runProject and other path properties
   ## due to bug in NPM passing arguments with
   ## backslash at the end
-  ## https://github.com/cypress-io/cypress-monorepo/issues/535
+  ## https://github.com/cypress-io/cypress/issues/535
   # these properties are paths and likely to have backslash on Windows
   pathProperties = ["runProject", "project", "appPath", "execPath"]
 
@@ -39,24 +40,36 @@ normalizeBackslashes = (options) ->
 
   options
 
-parseNestedValues = (vals) ->
-  ## convert foo=bar,version=1.2.3 to
-  ## {foo: 'bar', version: '1.2.3'}
-  _
-  .chain(vals)
-  .split(",")
-  .map (pair) ->
-    pair.split(everythingAfterFirstEqualRe)
-  .fromPairs()
-  .mapValues(coerce)
-  .value()
-
 backup = (key, options) ->
   options["_#{key}"] = options[key]
 
 anyUnderscoredValuePairs = (val, key, obj) ->
   return v if v = obj["_#{key}"]
   return val
+
+strToArray = (str) ->
+  [].concat(str.split(","))
+
+commasForBars = (match, p1) ->
+  ## swap out comma's for bars
+  p1.split(",").join("|")
+
+sanitizeAndConvertNestedArgs = (str) ->
+  ## find foo={a=b,b=c} and bar=[1,2,3] syntax first
+  ## and turn those into
+  ## foo: a=b|b=c
+  ## bar: 1|2|3
+
+  _
+  .chain(str)
+  .replace(nestedObjectsInCurlyBracesRe, commasForBars)
+  .replace(nestedArraysInSquareBracketsRe, commasForBars)
+  .split(",")
+  .map (pair) ->
+    pair.split(everythingAfterFirstEqualRe)
+  .fromPairs()
+  .mapValues(coerce)
+  .value()
 
 module.exports = {
   toObject: (argv) ->
@@ -68,28 +81,28 @@ module.exports = {
         "exec-path":   "execPath"
         "api-key":     "apiKey"
         "smoke-test":  "smokeTest"
-        "remove-ids":  "removeIds"
         "get-key":     "getKey"
         "new-key":     "generateKey"
         "clear-logs":  "clearLogs"
         "run-project": "runProject"
         "return-pkg":  "returnPkg"
-        "auto-open":   "autoOpen"
-        "env":         "environmentVariables"
-        "headless":    "isTextTerminal"
+        "runMode":    "isTextTerminal"
         "exit-with-code":   "exitWithCode"
         "reporter-options": "reporterOptions"
         "output-path":      "outputPath"
-        "group-id":         "groupId"
       }
     })
 
-    whitelisted = _.pick(argv, whitelist...)
+    whitelisted = _.pick(argv, whitelist)
 
     options = _
     .chain(options)
     .defaults(whitelisted)
-    .extend({env: process.env["CYPRESS_ENV"]})
+    .defaults({
+      ## set in case we
+      ## bypassed the cli
+      cwd: process.cwd()
+    })
     .mapValues(coerce)
     .value()
 
@@ -103,40 +116,52 @@ module.exports = {
       ## and apply them to both appPath + execPath
       [options.appPath, options.execPath] = options._.slice(-2)
 
-    if hosts = options.hosts
-      backup("hosts", options)
-      options.hosts = parseNestedValues(hosts)
+    if spec = options.spec
+      backup("spec", options)
 
-    if envs = options.environmentVariables
-      backup("environmentVariables", options)
-      options.environmentVariables = parseNestedValues(envs)
+      resolvePath = (p) ->
+        path.resolve(options.cwd, p)
+
+      options.spec = strToArray(spec).map(resolvePath)
+
+    if envs = options.env
+      backup("env", options)
+      options.env = sanitizeAndConvertNestedArgs(envs)
 
     if ro = options.reporterOptions
       backup("reporterOptions", options)
-      options.reporterOptions = parseNestedValues(ro)
+      options.reporterOptions = sanitizeAndConvertNestedArgs(ro)
 
     if c = options.config
       backup("config", options)
 
       ## convert config to an object
-      c = parseNestedValues(c)
+      ## annd store the config
+      options.config = sanitizeAndConvertNestedArgs(c)
 
-      ## store the config
-      options.config = c
+    ## get a list of the available config keys
+    configKeys = config.getConfigKeys()
 
-      ## and pull up and flatten any whitelisted
-      ## config directly into our options
-      _.extend options, config.whitelist(c)
+    ## and if any of our options match this
+    configValues = _.pick(options, configKeys)
+
+    ## then set them on config
+    ## this solves situations where we accept
+    ## root level arguments which also can
+    ## be set in configuration
+    _.each configValues, (val, key) ->
+      options.config ?= {}
+      options.config[key] = val
 
     options = normalizeBackslashes(options)
 
-    ## normalize project to projectPath
+    ## normalize project to projectRoot
     if p = options.project or options.runProject
-      options.projectPath = path.resolve(cwd(), p)
+      options.projectRoot = path.resolve(options.cwd, p)
 
-    ## normalize output path from current working directory
+    ## normalize output path from previous current working directory
     if op = options.outputPath
-      options.outputPath = path.resolve(cwd(), op)
+      options.outputPath = path.resolve(options.cwd, op)
 
     if options.runProject
       options.run = true

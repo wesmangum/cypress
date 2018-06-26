@@ -8,9 +8,9 @@ const util = require(`${lib}/util`)
 describe('exec open', function () {
   context('.start', function () {
     beforeEach(function () {
-      this.sandbox.stub(util, 'isInstalledGlobally').returns(true)
-      this.sandbox.stub(verify, 'start').resolves()
-      this.sandbox.stub(spawn, 'start').resolves()
+      sinon.stub(util, 'isInstalledGlobally').returns(true)
+      sinon.stub(verify, 'start').resolves()
+      sinon.stub(spawn, 'start').resolves()
     })
 
     it('verifies download', function () {
@@ -21,11 +21,12 @@ describe('exec open', function () {
     })
 
     it('calls spawn with correct options', function () {
-      return open.start()
+      return open.start({ dev: true })
       .then(() => {
         expect(spawn.start).to.be.calledWith([], {
           detached: false,
           stdio: 'inherit',
+          dev: true,
         })
       })
     })
@@ -61,6 +62,17 @@ describe('exec open', function () {
       return open.start()
       .then(() => {
         expect(spawn.start).to.be.calledWith(
+          ['--project', process.cwd()]
+        )
+      })
+    })
+
+    it('spawns without --project if not installed globally and passing --global option', function () {
+      util.isInstalledGlobally.returns(false)
+
+      return open.start({ global: true })
+      .then(() => {
+        expect(spawn.start).not.to.be.calledWith(
           ['--project', process.cwd()]
         )
       })

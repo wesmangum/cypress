@@ -36,14 +36,6 @@ _PROVIDERS = {
   circle: {
     main: "cypress-io/cypress"
     others: [
-      # "cypress-io/cypress-dashboard"
-      # "cypress-io/cypress-core-example"
-      # "cypress-io/cypress-core-desktop-gui"
-      # "cypress-io/cypress-example-kitchensink"
-      # "cypress-io/cypress-example-todomvc"
-      # "cypress-io/cypress-example-piechopper"
-      # "cypress-io/cypress-example-recipes"
-
       "cypress-io/cypress-test-tiny"
       "cypress-io/cypress-test-module-api"
       "cypress-io/cypress-test-node-versions"
@@ -52,16 +44,6 @@ _PROVIDERS = {
       "cypress-io/cypress-test-example-repos"
     ]
   }
-
-  # travis: [
-  #   # "cypress-io/cypress-dashboard"
-  #   "cypress-io/cypress-core-example"
-  #   "cypress-io/cypress-core-desktop-gui"
-  #   "cypress-io/cypress-example-kitchensink"
-  #   "cypress-io/cypress-example-todomvc"
-  #   "cypress-io/cypress-example-piechopper"
-  #   "cypress-io/cypress-example-recipes"
-  # ]
 }
 
 remapProjects = (projectsByProvider) ->
@@ -90,10 +72,9 @@ remapMain = (projectsByProvider) ->
 # make flat list of objects
 # {repo, provider}
 PROJECTS = remapProjects(_PROVIDERS)
-MAIN_PROJECTS = remapMain(_PROVIDERS)
 
 getCiConfig = ->
-  key = path.join("scripts", "support", ".ci.json")
+  key = path.join("scripts", "support", "ci.json")
   config = configFromEnvOrJsonFile(key)
 
   if !config
@@ -150,18 +131,21 @@ getFilterByProvider = (providerName) ->
 
 module.exports = {
   nextVersion: (version) ->
-    console.table("All possible projects", MAIN_PROJECTS)
+    MAIN_PROJECTS = remapMain(_PROVIDERS)
+    console.log("Setting next version to build", version)
+    console.table("In these projects", MAIN_PROJECTS)
 
     la(check.unemptyString(version),
       "missing next version to set", version)
 
-    updateProject = (project, provider) ->
-      console.log("setting %s environment variables in project %s", provider, project)
+    setNextDevVersion = (project, provider) ->
+      console.log("setting env var NEXT_DEV_VERSION to %s on %s in project %s",
+        version, provider, project)
       car.updateProjectEnv(project, provider, {
         NEXT_DEV_VERSION: version,
       })
 
-    awaitEachProjectAndProvider(MAIN_PROJECTS, updateProject)
+    awaitEachProjectAndProvider(MAIN_PROJECTS, setNextDevVersion)
 
   # in each project, set a couple of environment variables
   version: (nameOrUrl, binaryVersionOrUrl, platform, providerName) ->
@@ -189,18 +173,21 @@ module.exports = {
       console.log("setting environment variables in", project)
       car.updateProjectEnv(project, provider, {
         CYPRESS_NPM_PACKAGE_NAME: nameOrUrl,
-        CYPRESS_BINARY_VERSION: binaryVersionOrUrl
+        CYPRESS_INSTALL_BINARY: binaryVersionOrUrl
       })
     awaitEachProjectAndProvider(PROJECTS, updateProject, projectFilter)
     .then R.always(result)
 
-  run: (message, providerName) ->
+  # triggers test projects on multiple CIs
+  # the test projects will exercise the new version of
+  # the Cypress test runner we just built
+  runTestProjects: (message, providerName, version) ->
     projectFilter = getFilterByProvider(providerName)
 
     if not message
       message =
         """
-        Testing new Cypress version
+        Testing new Cypress version #{version}
 
         """
       if process.env.CIRCLE_BUILD_URL
@@ -219,12 +206,31 @@ module.exports = {
       # make empty commit to trigger CIs
 
       parsedRepo = parse(project)
-      console.log("running project", project)
-      makeEmptyGithubCommit({
+      console.log("making commit to project", project)
+
+      defaultOptions = {
         owner: parsedRepo[0],
         repo: parsedRepo[1],
         token: creds.githubToken,
         message
-      })
+      }
+
+      if not version
+        return makeEmptyGithubCommit(defaultOptions)
+
+      # first try to commit to branch for next upcoming version
+      specificBranchOptions = {
+        owner: parsedRepo[0],
+        repo: parsedRepo[1],
+        token: creds.githubToken,
+        message,
+        branch: version
+      }
+      makeEmptyGithubCommit(specificBranchOptions)
+      .catch () ->
+        # maybe there is no branch for next version
+        # try default branch
+        makeEmptyGithubCommit(defaultOptions)
+
     awaitEachProjectAndProvider(PROJECTS, makeCommit, projectFilter)
 }

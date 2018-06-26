@@ -1,24 +1,38 @@
 const _ = require('lodash')
-const path = require('path')
 const commander = require('commander')
 const { oneLine } = require('common-tags')
 const debug = require('debug')('cypress:cli')
 const util = require('./util')
 const logger = require('./logger')
+const cache = require('./tasks/cache')
+
+// patch "commander" method called when a user passed an unknown option
+// we want to print help for the current command and exit with an error
+function unknownOption (flag, type = 'option') {
+  if (this._allowUnknownOption) return
+  logger.error()
+  logger.error(`  error: unknown ${type}:`, flag)
+  logger.error()
+  this.outputHelp()
+  logger.error()
+  process.exit(1)
+}
+commander.Command.prototype.unknownOption = unknownOption
 
 const coerceFalse = (arg) => {
   return arg !== 'false'
 }
 
-const parseOpts = (opts) =>  {
+const parseOpts = (opts) => {
   opts = _.pick(opts,
     'project', 'spec', 'reporter', 'reporterOptions', 'path', 'destination',
     'port', 'env', 'cypressVersion', 'config', 'record', 'key',
-    'browser', 'detached', 'headed',
-    'group', 'groupId')
+    'browser', 'detached', 'headed', 'global', 'dev', 'force', 'exit',
+    'cachePath', 'cacheList', 'cacheClear'
+  )
 
-  if (opts.project) {
-    opts.project = path.resolve(opts.project)
+  if (opts.exit) {
+    opts = _.omit(opts, 'exit')
   }
 
   debug('parsed cli options', opts)
@@ -41,13 +55,18 @@ const descriptions = {
   `,
   detached: 'runs Cypress application in detached mode',
   project: 'path to the project',
+  global: 'force Cypress into global mode as if its globally installed',
   version: 'Prints Cypress version',
   headed: 'displays the Electron browser instead of running headlessly',
-  group: 'flag to group individual runs by using common --group-id',
-  groupId: 'optional common id to group runs by, extracted from CI environment variables by default',
+  dev: 'runs cypress in development and bypasses binary check',
+  forceInstall: 'force install the Cypress binary',
+  exit: 'keep the browser open after tests finish',
+  cachePath: 'print the cypress binary cache path',
+  cacheList: 'list the currently cached versions',
+  cacheClear: 'delete the Cypress binary cache',
 }
 
-const knownCommands = ['version', 'run', 'open', 'install', 'verify', '-v', '--version', 'help', '-h', '--help']
+const knownCommands = ['version', 'run', 'open', 'install', 'verify', '-v', '--version', 'help', '-h', '--help', 'cache']
 
 const text = (description) => {
   if (!descriptions[description]) {
@@ -72,6 +91,7 @@ function showVersions () {
     logger.log('Cypress binary version:', versions.binary)
     process.exit(0)
   })
+  .catch(util.logErrorExit1)
 }
 
 module.exports = {
@@ -87,78 +107,101 @@ module.exports = {
     program._name = 'cypress'
 
     program
-      .command('help')
-      .description('Shows CLI help and exits')
-      .action(() => {
-        program.help()
-      })
+    .command('help')
+    .description('Shows CLI help and exits')
+    .action(() => {
+      program.help()
+    })
 
     program
-      .option('-v, --version', text('version'))
-      .command('version')
-      .description(text('version'))
-      .action(showVersions)
+    .option('-v, --version', text('version'))
+    .command('version')
+    .description(text('version'))
+    .action(showVersions)
 
     program
-      .command('run')
-      .usage('[options]')
-      .description('Runs Cypress tests from the CLI without the GUI')
-      .option('--record [bool]',                           text('record'), coerceFalse)
-      .option('--headed',                                  text('headed'))
-      .option('-k, --key <record-key>',                    text('key'))
-      .option('-s, --spec <spec>',                         text('spec'))
-      .option('-r, --reporter <reporter>',                 text('reporter'))
-      .option('-o, --reporter-options <reporter-options>', text('reporterOptions'))
-      .option('-p, --port <port>',                         text('port'))
-      .option('-e, --env <env>',                           text('env'))
-      .option('-c, --config <config>',                     text('config'))
-      .option('-b, --browser <browser-name>',              text('browser'))
-      .option('-P, --project <project-path>',              text('project'))
-      .option('--group',                                   text('group'), coerceFalse)
-      .option('--group-id <group-id>',                     text('groupId'))
-      .action((opts) => {
-        debug('running Cypress')
-        require('./exec/run')
-        .start(parseOpts(opts))
-        .then(util.exit)
-        .catch(util.logErrorExit1)
-      })
+    .command('run')
+    .usage('[options]')
+    .description('Runs Cypress tests from the CLI without the GUI')
+    .option('--record [bool]', text('record'), coerceFalse)
+    .option('--headed', text('headed'))
+    .option('-k, --key <record-key>', text('key'))
+    .option('-s, --spec <spec>', text('spec'))
+    .option('-r, --reporter <reporter>', text('reporter'))
+    .option('-o, --reporter-options <reporter-options>', text('reporterOptions'))
+    .option('-p, --port <port>', text('port'))
+    .option('-e, --env <env>', text('env'))
+    .option('-c, --config <config>', text('config'))
+    .option('-b, --browser <browser-name>', text('browser'))
+    .option('-P, --project <project-path>', text('project'))
+    .option('--no-exit', text('exit'))
+    .option('--dev', text('dev'), coerceFalse)
+    .action((opts) => {
+      debug('running Cypress')
+      require('./exec/run')
+      .start(parseOpts(opts))
+      .then(util.exit)
+      .catch(util.logErrorExit1)
+    })
 
     program
-      .command('open')
-      .usage('[options]')
-      .description('Opens Cypress in the interactive GUI.')
-      .option('-p, --port <port>',         text('port'))
-      .option('-e, --env <env>',           text('env'))
-      .option('-c, --config <config>',     text('config'))
-      .option('-d, --detached [bool]',     text('detached'), coerceFalse)
-      .option('-P, --project <project path>', text('project'))
-      .action((opts) => {
-        debug('opening Cypress')
-        require('./exec/open')
-        .start(parseOpts(opts))
-        .catch(util.logErrorExit1)
-      })
+    .command('open')
+    .usage('[options]')
+    .description('Opens Cypress in the interactive GUI.')
+    .option('-p, --port <port>', text('port'))
+    .option('-e, --env <env>', text('env'))
+    .option('-c, --config <config>', text('config'))
+    .option('-d, --detached [bool]', text('detached'), coerceFalse)
+    .option('-P, --project <project path>', text('project'))
+    .option('--global', text('global'))
+    .option('--dev', text('dev'), coerceFalse)
+    .action((opts) => {
+      debug('opening Cypress')
+      require('./exec/open')
+      .start(parseOpts(opts))
+      .catch(util.logErrorExit1)
+    })
 
     program
-      .command('install')
-      .description('Installs the Cypress executable matching this package\'s version')
-      .action(() => {
-        require('./tasks/install')
-        .start({ force: true })
-        .catch(util.logErrorExit1)
-      })
+    .command('install')
+    .usage('[options]')
+    .description('Installs the Cypress executable matching this package\'s version')
+    .option('-f, --force', text('forceInstall'))
+    .action((opts) => {
+      require('./tasks/install')
+      .start(parseOpts(opts))
+      .catch(util.logErrorExit1)
+    })
 
     program
-      .command('verify')
-      .description('Verifies that Cypress is installed correctly and executable')
-      .action(() => {
-        require('./tasks/verify')
-        .start({ force: true, welcomeMessage: false })
-        .catch(util.logErrorExit1)
-      })
+    .command('verify')
+    .usage('[options]')
+    .description('Verifies that Cypress is installed correctly and executable')
+    .action((opts) => {
+      const defaultOpts = { force: true, welcomeMessage: false }
+      const parsedOpts = parseOpts(opts)
+      const options = _.extend(parsedOpts, defaultOpts)
+      require('./tasks/verify')
+      .start(options)
+      .catch(util.logErrorExit1)
+    })
+
+    program
+    .command('cache')
+    .usage('[command]')
+    .description('Manages the Cypress binary cache')
+    .option('list', text('cacheList'))
+    .option('path', text('cachePath'))
+    .option('clear', text('cacheClear'))
+    .action(function (opts) {
+      if (opts.command || !_.includes(['list', 'path', 'clear'], opts)) {
+        unknownOption.call(this, `cache ${opts}`, 'sub-command')
+      }
+      cache[opts]()
+    })
 
     debug('cli starts with arguments %j', args)
+    util.printNodeOptions()
 
     // if there are no arguments
     if (args.length <= 2) {
@@ -167,9 +210,11 @@ module.exports = {
       // exits
     }
 
+    // Deprecated Catches
+
     const firstCommand = args[2]
     if (!_.includes(knownCommands, firstCommand)) {
-      debug('unknwon command %s', firstCommand)
+      debug('unknown command %s', firstCommand)
       logger.error('Unknown command', `"${firstCommand}"`)
       program.outputHelp()
       return util.exit(1)

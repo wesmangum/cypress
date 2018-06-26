@@ -1,13 +1,12 @@
 _             = require("lodash")
-fs            = require("fs-extra")
 path          = require("path")
 Promise       = require("bluebird")
-log           = require("debug")("cypress:server:browsers")
+debug         = require("debug")("cypress:server:browsers")
 utils         = require("./utils")
 errors        = require("../errors")
+fs            = require("../util/fs")
 
-fs              = Promise.promisifyAll(fs)
-instance        = null
+instance = null
 
 kill = (unbind) ->
   ## cleanup our running browser
@@ -18,7 +17,12 @@ kill = (unbind) ->
     if unbind
       instance.removeAllListeners()
 
-    instance.once("exit", resolve)
+    instance.once "exit", (code, sigint) ->
+      debug("browser process killed")
+
+      resolve.apply(null, arguments)
+
+    debug("killing browser process")
 
     instance.kill()
     cleanup()
@@ -34,9 +38,27 @@ getBrowser = (name) ->
     when "electron"
       require("./electron")
 
+find = (browser, browsers = []) ->
+  _.find(browsers, { name: browser })
+
+ensureAndGetByName = (name) ->
+  utils.getBrowsers()
+  .then (browsers = []) ->
+    find(name, browsers) or throwBrowserNotFound(name, browsers)
+
+throwBrowserNotFound = (browser, browsers = []) ->
+  names = _.map(browsers, "name").join(", ")
+  errors.throw("BROWSER_NOT_FOUND", browser, names)
+
 process.once "exit", kill
 
 module.exports = {
+  find
+
+  ensureAndGetByName
+
+  throwBrowserNotFound
+
   get: utils.getBrowsers
 
   launch: utils.launch
@@ -47,22 +69,21 @@ module.exports = {
     kill(true)
     .then ->
       _.defaults(options, {
-        browserArgs: []
         onBrowserOpen: ->
         onBrowserClose: ->
       })
 
       if not browser = getBrowser(name)
-        names = _.map(options.browsers, "name").join(", ")
-        return errors.throw("BROWSER_NOT_FOUND", name, names)
+        return throwBrowserNotFound(name, options.browsers)
 
       if not url = options.url
         throw new Error("options.url must be provided when opening a browser. You passed:", options)
 
-      log("open browser %s", name)
+      debug("opening browser %s", name)
+
       browser.open(name, url, options, automation)
       .then (i) ->
-        log("browser opened")
+        debug("browser opened")
         ## TODO: bind to process.exit here
         ## or move this functionality into cypress-core-launder
 

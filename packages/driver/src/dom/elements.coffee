@@ -3,6 +3,7 @@ $ = require("jquery")
 $jquery = require("./jquery")
 $window = require("./window")
 $document = require("./document")
+$utils = require("../cypress/utils")
 
 fixedOrStickyRe = /(fixed|sticky)/
 
@@ -147,6 +148,18 @@ getFirstFixedOrStickyPositionParent = ($el) ->
   ## else recursively continue to walk up the parent node chain
   getFirstFixedOrStickyPositionParent($el.parent())
 
+getFirstStickyPositionParent = ($el) ->
+  ## return null if we're at body/html
+  ## cuz that means nothing has sticky position
+  return null if not $el or $el.is("body,html")
+
+  ## if we have sticky position return ourselves
+  if $el.css("position") == "sticky"
+    return $el
+
+  ## else recursively continue to walk up the parent node chain
+  getFirstStickyPositionParent($el.parent())
+
 getFirstScrollableParent = ($el) ->
   # doc = $el.prop("ownerDocument")
 
@@ -190,6 +203,35 @@ getElements = ($el) ->
     els[0]
   else
     els
+
+getContainsSelector = (text, filter = "") ->
+  escapedText = $utils.escapeQuotes(text)
+  "#{filter}:not(script):contains('#{escapedText}'), #{filter}[type='submit'][value~='#{escapedText}']"
+
+priorityElement = "input[type='submit'], button, a, label"
+
+getFirstDeepestElement = (elements, index = 0) ->
+  ## iterate through all of the elements in pairs
+  ## and check if the next item in the array is a
+  ## descedent of the current. if it is continue
+  ## to recurse. if not, or there is no next item
+  ## then return the current
+  $current = elements.slice(index,     index + 1)
+  $next    = elements.slice(index + 1, index + 2)
+
+  return $current if not $next
+
+  ## does current contain next?
+  if $.contains($current.get(0), $next.get(0))
+    getFirstDeepestElement(elements, index + 1)
+  else
+    ## return the current if it already is a priority element
+    return $current if $current.is(priorityElement)
+
+    ## else once we find the first deepest element then return its priority
+    ## parent if it has one and it exists in the elements chain
+    $priorities = elements.filter $current.parents(priorityElement)
+    if $priorities.length then $priorities.last() else $current
 
 ## short form css-inlines the element
 ## long form returns the outerHTML
@@ -262,7 +304,13 @@ module.exports = {
 
   getElements
 
+  getContainsSelector
+
+  getFirstDeepestElement
+
   getFirstFixedOrStickyPositionParent
+
+  getFirstStickyPositionParent
 
   getFirstScrollableParent
 }

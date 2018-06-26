@@ -5,11 +5,9 @@
   "main": "index.js",
   "browser": "src/main",
   "scripts": {
-    "start": "coffee test/support/server.coffee",
-    "test-unit": "mocha",
-    "test-unit-watch": "./test/support/watch",
-    "test-unit-debug": "node --inspect --debug-brk ./node_modules/.bin/_mocha",
-    "test-integration": "node ../../scripts/run-cypress-tests.js --browser chrome --dir test",
+    "start": "../coffee/node_modules/.bin/coffee test/support/server.coffee",
+    "cypress:open": "node ../../cli/bin/cypress open --dev --project ./test",
+    "cypress:run": "node ../../scripts/run-cypress-tests.js --browser chrome --dir test",
     "clean-deps": "rm -rf node_modules"
   },
   "files": [
@@ -19,6 +17,7 @@
     "@cypress/bower-kendo-ui": "0.0.2",
     "@cypress/sinon-chai": "1.1.0",
     "@cypress/underscore.inflection": "^1.0.0",
+    "@cypress/unique-selector": "0.4.2",
     "angular": "^1.3.1",
     "backbone": "^1.3.3",
     "basic-auth": "^2.0.0",
@@ -26,6 +25,7 @@
     "bluebird": "3.5.0",
     "body-parser": "^1.12.4",
     "bootstrap": "^3.3.5",
+    "bytes": "^3.0.0",
     "card": "^1.0.2",
     "chai": "3.5.0",
     "chai-as-promised": "6.0.0",
@@ -50,6 +50,7 @@
     "moment": "^2.14.1",
     "morgan": "^1.3.0",
     "npm-install-version": "^6.0.2",
+    "parse-domain": "2.0.0",
     "setimmediate": "^1.0.2",
     "sinon": "3.2.0",
     "underscore": "^1.8.3",

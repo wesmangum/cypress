@@ -5,6 +5,7 @@ cyDesktop     = require("@packages/desktop-gui")
 extension     = require("@packages/extension")
 contextMenu   = require("electron-context-menu")
 BrowserWindow = require("electron").BrowserWindow
+debug         = require("debug")("cypress:server:windows")
 cwd           = require("../cwd")
 user          = require("../user")
 savedState    = require("../saved_state")
@@ -118,7 +119,7 @@ module.exports = {
             resolve(img.toDataURL())
     }
 
-  create: (options = {}) ->
+  defaults: (options = {}) ->
     _.defaultsDeep(options, {
       x:               null
       y:               null
@@ -126,12 +127,14 @@ module.exports = {
       frame:           true
       width:           null
       height:          null
-      winWidth:        null
+      minWidth:        null
       minHeight:       null
       devTools:        false
       trackState:      false
       contextMenu:     false
       recordFrameRate: null
+      # extension:       null ## TODO add these once we update electron
+      # devToolsExtension: null ## since these API's were added in 1.7.6
       onPaint:         null
       onFocus: ->
       onBlur: ->
@@ -144,6 +147,9 @@ module.exports = {
         backgroundThrottling: false
       }
     })
+
+  create: (projectRoot, options = {}) ->
+    options = @defaults(options)
 
     if options.show is false
       options.frame = false
@@ -171,7 +177,7 @@ module.exports = {
       options.onNewWindow.apply(win, arguments)
 
     if ts = options.trackState
-      @trackState(options.projectPath, win, ts)
+      @trackState(projectRoot, options.isTextTerminal, win, ts)
 
     ## open dev tools if they're true
     if options.devTools
@@ -205,7 +211,7 @@ module.exports = {
 
     win
 
-  open: (options = {}) ->
+  open: (projectRoot, options = {}) ->
     ## if we already have a window open based
     ## on that type then just show + focus it!
     if win = getByType(options.type)
@@ -220,7 +226,7 @@ module.exports = {
 
     recentlyCreatedWindow = true
 
-    _.defaults options, {
+    _.defaults(options, {
       width:  600
       height: 500
       show:   true
@@ -228,7 +234,7 @@ module.exports = {
       webPreferences: {
         preload: cwd("lib", "ipc", "ipc.js")
       }
-    }
+    })
 
     urlChanged = (url, resolve) ->
       parsed = uri.parse(url, true)
@@ -248,7 +254,9 @@ module.exports = {
     #   args.width = 0
     #   args.height = 0
 
-    win = @create(options)
+    win = @create(projectRoot, options)
+
+    debug("creating electron window with options %o", options)
 
     windows[options.type] = win
 
@@ -291,7 +299,7 @@ module.exports = {
       else
         return win
 
-  trackState: (projectPath, win, keys) ->
+  trackState: (projectRoot, isTextTerminal, win, keys) ->
     isDestroyed = ->
       win.isDestroyed()
 
@@ -305,7 +313,7 @@ module.exports = {
       newState[keys.height] = height
       newState[keys.x] = x
       newState[keys.y] = y
-      savedState(projectPath)
+      savedState(projectRoot, isTextTerminal)
       .then (state) ->
         state.set(newState)
     , 500
@@ -317,7 +325,7 @@ module.exports = {
       newState = {}
       newState[keys.x] = x
       newState[keys.y] = y
-      savedState(projectPath)
+      savedState(projectRoot, isTextTerminal)
       .then (state) ->
         state.set(newState)
     , 500
@@ -325,14 +333,14 @@ module.exports = {
     win.webContents.on "devtools-opened", ->
       newState = {}
       newState[keys.devTools] = true
-      savedState(projectPath)
+      savedState(projectRoot, isTextTerminal)
       .then (state) ->
         state.set(newState)
 
     win.webContents.on "devtools-closed", ->
       newState = {}
       newState[keys.devTools] = false
-      savedState(projectPath)
+      savedState(projectRoot, isTextTerminal)
       .then (state) ->
         state.set(newState)
 

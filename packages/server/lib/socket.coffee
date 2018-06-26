@@ -1,19 +1,20 @@
 _             = require("lodash")
-fs            = require("fs-extra")
 path          = require("path")
 uuid          = require("node-uuid")
 Promise       = require("bluebird")
 socketIo      = require("@packages/socket")
+fs            = require("./util/fs")
 open          = require("./util/open")
 pathHelpers   = require("./util/path_helpers")
 cwd           = require("./cwd")
 exec          = require("./exec")
+task          = require("./task")
 files         = require("./files")
 fixture       = require("./fixture")
 errors        = require("./errors")
 logger        = require("./logger")
-browsers      = require("./browsers")
 automation    = require("./automation")
+preprocessor  = require("./plugins/preprocessor")
 log           = require('debug')('cypress:server:socket')
 
 runnerEvents = [
@@ -46,52 +47,52 @@ isSpecialSpec = (name) ->
   name.endsWith("__all")
 
 class Socket
-  constructor: ->
+  constructor: (config) ->
     if not (@ instanceof Socket)
-      return new Socket
+      return new Socket(config)
+
+    @ended = false
+
+    @onTestFileChange = @onTestFileChange.bind(@)
+
+    if config.watchForFileChanges
+      preprocessor.emitter.on("file:updated", @onTestFileChange)
 
   onTestFileChange: (filePath) ->
-    logger.info "onTestFileChange", filePath: filePath
-
-    ## return if we're not a js or coffee file.
-    ## this will weed out directories as well
-    return if not /\.(js|jsx|coffee|cjsx)$/.test filePath
+    log("test file changed: #{filePath}")
 
     fs.statAsync(filePath)
     .then =>
       @io.emit("watched:file:changed")
     .catch ->
+      log("could not find test file that changed: #{filePath}")
 
-  watchTestFileByPath: (config, originalFilePath, watchers, options) ->
+  ## TODO: clean this up by sending the spec object instead of
+  ## the url path
+  watchTestFileByPath: (config, originalFilePath, options) ->
     ## files are always sent as integration/foo_spec.js
     ## need to take into account integrationFolder may be different so
     ## integration/foo_spec.js becomes cypress/my-integration-folder/foo_spec.js
     log("watch test file #{originalFilePath}")
     filePath = path.join(config.integrationFolder, originalFilePath.replace("integration/", ""))
-    filePath = filePath.replace("#{config.projectRoot}/", "")
+    filePath = path.relative(config.projectRoot, filePath)
 
     ## bail if this is special path like "__all"
     ## maybe the client should not ask to watch non-spec files?
     return if isSpecialSpec(filePath)
 
-    ## bail if we're already watching this
-    ## exact file or we've turned off watching
-    ## for file changes
-    return if (filePath is @testFilePath) or (config.watchForFileChanges is false)
-
-    logger.info "watching test file", {path: filePath}
+    ## bail if we're already watching this exact file
+    return if filePath is @testFilePath
 
     ## remove the existing file by its path
     if @testFilePath
-      watchers.removeBundle(@testFilePath)
+      preprocessor.removeFile(@testFilePath, config)
 
     ## store this location
     @testFilePath = filePath
     log("will watch test file path #{filePath}")
 
-    watchers.watchBundle(filePath, config, {
-      onChange: @onTestFileChange.bind(@)
-    })
+    preprocessor.getFile(filePath, config)
     ## ignore errors b/c we're just setting up the watching. errors
     ## are handled by the spec controller
     .catch ->
@@ -127,7 +128,7 @@ class Socket
       cookie: cookie
     })
 
-  startListening: (server, watchers, automation, config, options) ->
+  startListening: (server, automation, config, options) ->
     existingState = null
 
     _.defaults options,
@@ -181,6 +182,9 @@ class Socket
         ## if our automation disconnects then we're
         ## in trouble and should probably bomb everything
         automationClient.on "disconnect", =>
+          ## if we've stopped then don't do anything
+          return if @ended
+
           ## if we are in headless mode then log out an error and maybe exit with process.exit(1)?
           Promise.delay(500)
           .then =>
@@ -207,7 +211,7 @@ class Socket
         socket.on "automation:response", automation.response
 
       socket.on "automation:request", (message, data, cb) =>
-        log("automation:request", message, data)
+        log("automation:request %o", message, data)
 
         automationRequest(message, data)
         .then (resp) ->
@@ -235,7 +239,7 @@ class Socket
         options.onSpecChanged(spec)
 
       socket.on "watch:test:file", (filePath, cb = ->) =>
-        @watchTestFileByPath(config, filePath, watchers, options)
+        @watchTestFileByPath(config, filePath, options)
         ## callback is only for testing purposes
         cb()
 
@@ -283,7 +287,7 @@ class Socket
         ## cb is always the last argument
         cb = args.pop()
 
-        log("backend:request", eventName, cb, args)
+        log("backend:request", { eventName, args })
 
         backendRequest = ->
           switch eventName
@@ -291,7 +295,8 @@ class Socket
               existingState = args[0]
               null
             when "resolve:url"
-              options.onResolveUrl(args[0], headers, automationRequest)
+              [url, resolveOpts] = args
+              options.onResolveUrl(url, headers, automationRequest, resolveOpts)
             when "http:request"
               options.onRequest(headers, automationRequest, args[0])
             when "get:fixture"
@@ -302,6 +307,8 @@ class Socket
               files.writeFile(config.projectRoot, args[0], args[1], args[2])
             when "exec"
               exec.run(config.projectRoot, args[0])
+            when "task"
+              task.run(config.pluginsFile, args[0])
             else
               throw new Error(
                 "You requested a backend event we cannot handle: #{eventName}"
@@ -335,6 +342,8 @@ class Socket
           @toReporter(event, data)
 
   end: ->
+    @ended = true
+
     ## TODO: we need an 'ack' from this end
     ## event from the other side
     @io and @io.emit("tests:finished")
@@ -343,6 +352,7 @@ class Socket
     @toRunner("change:to:url", url)
 
   close: ->
+    preprocessor.emitter.removeListener("file:updated", @onTestFileChange)
     @io?.close()
 
 module.exports = Socket

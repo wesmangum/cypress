@@ -1,18 +1,23 @@
-fs       = require("fs-extra")
 path     = require("path")
 Promise  = require("bluebird")
 launcher = require("@packages/launcher")
+fs       = require("../util/fs")
 appData  = require("../util/app_data")
-
-fs = Promise.promisifyAll(fs)
 
 profiles = appData.path("browsers")
 
 module.exports = {
-  ensureProfile: (name) ->
-    p = path.join(profiles, name)
+  getProfileDir: (name) ->
+    path.join(profiles, name)
 
-    fs.ensureDirAsync(p).return(p)
+  ensureCleanCache: (name) ->
+    p = path.join(profiles, name, "CypressCache")
+
+    fs
+    .removeAsync(p)
+    .then ->
+      fs.ensureDirAsync(p)
+    .return(p)
 
   copyExtension: (src, dest) ->
     fs.copyAsync(src, dest)
@@ -26,6 +31,7 @@ module.exports = {
 
       browsers.concat({
         name: "electron"
+        displayName: "Electron"
         version: version
         path: ""
         majorVersion: version.split(".")[0]

@@ -1,6 +1,7 @@
 _           = require("lodash")
 ipc         = require("electron").ipcMain
 shell       = require("electron").shell
+debug       = require('debug')('cypress:server:events')
 dialog      = require("./dialog")
 pkg         = require("./package")
 logs        = require("./logs")
@@ -8,7 +9,6 @@ Windows     = require("./windows")
 api         = require("../api")
 open        = require("../util/open")
 user        = require("../user")
-logger      = require("../logger")
 errors      = require("../errors")
 Updater     = require("../updater")
 Project     = require("../project")
@@ -17,12 +17,15 @@ connect     = require("../util/connect")
 konfig      = require("../konfig")
 
 handleEvent = (options, bus, event, id, type, arg) ->
+  debug("got request for event: %s, %o", type, arg)
+
   sendResponse = (data = {}) ->
     try
-      logger.info("sending ipc data", type: type, data: data)
+      debug("sending ipc data %o", {type: type, data: data})
       event.sender.send("response", data)
 
   sendErr = (err) ->
+    debug("send error: %o", err)
     sendResponse({id: id, __error: errors.clone(err, {html: true})})
 
   send = (data) ->
@@ -50,6 +53,9 @@ handleEvent = (options, bus, event, id, type, arg) ->
 
     when "on:config:changed"
       onBus("config:changed")
+
+    when "on:project:error"
+      onBus("project:error")
 
     when "on:project:warning"
       onBus("project:warning")
@@ -95,9 +101,8 @@ handleEvent = (options, bus, event, id, type, arg) ->
       .catch(sendErr)
 
     when "launch:browser"
-      # headless.createWindows(arg, true)
       openProject.launch(arg.browser, arg.spec, {
-        projectPath: options.projectPath
+        projectRoot: options.projectRoot
         onBrowserOpen: ->
           send({browserOpened: true})
         onBrowserClose: ->
@@ -106,7 +111,7 @@ handleEvent = (options, bus, event, id, type, arg) ->
       .catch(sendErr)
 
     when "window:open"
-      Windows.open(arg)
+      Windows.open(options.projectRoot, arg)
       .then(send)
       .catch(sendErr)
 
@@ -188,6 +193,9 @@ handleEvent = (options, bus, event, id, type, arg) ->
           options.onFocusTests()
         bus.emit("focus:tests")
 
+      onError = (err) ->
+        bus.emit("project:error", errors.clone(err, {html: true}))
+
       onWarning = (warning) ->
         bus.emit("project:warning", errors.clone(warning, {html: true}))
 
@@ -195,6 +203,7 @@ handleEvent = (options, bus, event, id, type, arg) ->
         onFocusTests: onFocusTests
         onSpecChanged: onSpecChanged
         onSettingsChanged: onSettingsChanged
+        onError: onError
         onWarning: onWarning
       })
       .call("getConfig")

@@ -457,7 +457,7 @@ describe "src/cy/commands/window", ->
 
       Cypress.prependListener("viewport:changed", fn)
 
-      cy.viewport(1000, 600).then ->
+      cy.viewport(1000, 660).then ->
         Cypress.removeListener("viewport:changed", fn)
 
     it "does not trigger 'viewport:changed' when changing to the same viewport", ->
@@ -472,6 +472,40 @@ describe "src/cy/commands/window", ->
       cy.viewport(800, 600)
       cy.viewport(800, 600).then ->
         Cypress.removeListener("viewport:changed", fn)
+
+    it "triggers 'viewport:changed' if width changes", (done) ->
+      finished = false
+      setTimeout ->
+        if not finished
+          done("Timed out before 'viewport:changed'")
+      , 1000
+      triggeredOnce = false
+      cy.on "viewport:changed", (viewport) ->
+        if triggeredOnce
+          expect(viewport).to.eql({ viewportWidth: 900, viewportHeight: 600 })
+          finished = true
+          done()
+        triggeredOnce = true
+
+      cy.viewport(800, 600)
+      cy.viewport(900, 600)
+
+    it "triggers 'viewport:changed' if height changes", (done) ->
+      finished = false
+      setTimeout ->
+        if not finished
+          done("Timed out before 'viewport:changed'")
+      , 1000
+      triggeredOnce = false
+      cy.on "viewport:changed", (viewport) ->
+        if triggeredOnce
+          expect(viewport).to.eql({ viewportWidth: 800, viewportHeight: 700 })
+          finished = true
+          done()
+        triggeredOnce = true
+
+      cy.viewport(800, 600)
+      cy.viewport(800, 700)
 
     it "sets subject to null", ->
       cy.viewport("ipad-2").then (subject) ->
@@ -578,26 +612,26 @@ describe "src/cy/commands/window", ->
       it "throws when passed negative numbers", (done) ->
         cy.on "fail", (err) =>
           expect(@logs.length).to.eq(1)
-          expect(err.message).to.eq "cy.viewport() width and height must be between 200px and 3000px."
+          expect(err.message).to.eq "cy.viewport() width and height must be between 20px and 3000px."
           done()
 
         cy.viewport(800, -600)
 
-      it "throws when passed width less than 200", (done) ->
+      it "throws when passed width less than 20", (done) ->
         cy.on "fail", (err) =>
           expect(@logs.length).to.eq(1)
-          expect(err.message).to.eq "cy.viewport() width and height must be between 200px and 3000px."
+          expect(err.message).to.eq "cy.viewport() width and height must be between 20px and 3000px."
           done()
 
-        cy.viewport(199, 600)
+        cy.viewport(19, 600)
 
-      it "does not throw when passed width equal to 200", ->
-        cy.viewport(200, 600)
+      it "does not throw when passed width equal to 20", ->
+        cy.viewport(20, 600)
 
       it "throws when passed height greater than than 3000", (done) ->
         cy.on "fail", (err) =>
           expect(@logs.length).to.eq(1)
-          expect(err.message).to.eq "cy.viewport() width and height must be between 200px and 3000px."
+          expect(err.message).to.eq "cy.viewport() width and height must be between 20px and 3000px."
           done()
 
         cy.viewport(1000, 3001)

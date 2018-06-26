@@ -13,22 +13,52 @@ class Specs extends Component {
   render () {
     if (specsStore.isLoading) return <Loader color='#888' scale={0.5}/>
 
-    if (!specsStore.specs.length) return this._empty()
+    if (!specsStore.filter && !specsStore.specs.length) return this._empty()
 
-    let allActiveClass = specsStore.allSpecsChosen ? 'active' : ''
+    const allSpecsSpec = specsStore.getAllSpecsSpec()
 
     return (
       <div id='tests-list-page'>
-        <a onClick={this._selectSpec.bind(this, '__all')} className={`all-tests btn btn-link ${allActiveClass}`}>
-          <i className={`fa fa-fw ${this._allSpecsIcon(specsStore.allSpecsChosen)}`}></i>{' '}
-          Run All Tests
-        </a>
-        <ul className='outer-files-container list-as-table'>
-          {_.map(specsStore.specs, (spec) => (
-            this._specItem(spec)
-          ))}
-        </ul>
+        <header>
+          <div className={cs('search', {
+            'show-clear-filter': !!specsStore.filter,
+          })}>
+            <label htmlFor='filter'>
+              <i className='fa fa-search'></i>
+            </label>
+            <input
+              id='filter'
+              className='filter'
+              placeholder='Search...'
+              value={specsStore.filter || ''}
+              onChange={this._updateFilter}
+              onKeyUp={this._executeFilterAction}
+            />
+            <a className='clear-filter fa fa-times' onClick={this._clearFilter} />
+          </div>
+          <a onClick={this._selectSpec.bind(this, allSpecsSpec)} className={cs('all-tests btn btn-default', { active: allSpecsSpec.isChosen })}>
+            <i className={`fa fa-fw ${this._allSpecsIcon(allSpecsSpec.isChosen)}`}></i>{' '}
+            {allSpecsSpec.displayName}
+          </a>
+        </header>
+        {this._specsList()}
       </div>
+    )
+  }
+
+  _specsList () {
+    if (specsStore.filter && !specsStore.specs.length) {
+      return (
+        <div className='empty-well'>
+          No files match the filter '{specsStore.filter}'
+        </div>
+      )
+    }
+
+    return (
+      <ul className='outer-files-container list-as-table'>
+        {_.map(specsStore.specs, (spec) => this._specItem(spec))}
+      </ul>
     )
   }
 
@@ -56,14 +86,26 @@ class Specs extends Component {
     }
   }
 
-  _selectSpec (specPath, e) {
+  _clearFilter = () => {
+    specsStore.clearFilter(this.props.project.id)
+  }
+
+  _updateFilter = (e) => {
+    specsStore.setFilter(this.props.project.id, e.target.value)
+  }
+
+  _executeFilterAction = (e) => {
+    if (e.key === 'Escape') {
+      this._clearFilter()
+    }
+  }
+
+  _selectSpec (spec, e) {
     e.preventDefault()
 
-    specsStore.setChosenSpec(specPath)
+    const { project } = this.props
 
-    let project = this.props.project
-
-    projectsApi.runSpec(project, specPath, project.chosenBrowser.name)
+    return projectsApi.runSpec(project, spec, project.chosenBrowser)
   }
 
   _selectSpecFolder (specFolderPath, e) {
@@ -72,7 +114,7 @@ class Specs extends Component {
     specsStore.setExpandSpecFolder(specFolderPath)
   }
 
-  _folderContent(spec) {
+  _folderContent (spec) {
     const isExpanded = spec.isExpanded
 
     return (
@@ -87,9 +129,7 @@ class Specs extends Component {
             isExpanded ?
               <div>
                 <ul className='list-as-table'>
-                  {_.map(spec.children.specs, (spec) => (
-                    this._specItem(spec)
-                  ))}
+                  {_.map(spec.children, (spec) => this._specItem(spec))}
                 </ul>
               </div> :
               null
@@ -99,14 +139,13 @@ class Specs extends Component {
     )
   }
 
-  _specContent(spec) {
-    const isChosen = specsStore.isChosenSpec(spec)
+  _specContent (spec) {
     return (
       <li key={spec.path} className='file'>
-        <a href='#' onClick={this._selectSpec.bind(this, spec.path)} className={cs({ active: isChosen })}>
+        <a href='#' onClick={this._selectSpec.bind(this, spec)} className={cs({ active: spec.isChosen })}>
           <div>
             <div>
-              <i className={`fa fa-fw ${this._specIcon(isChosen)}`}></i>
+              <i className={`fa fa-fw ${this._specIcon(spec.isChosen)}`}></i>
               {spec.displayName}
             </div>
           </div>

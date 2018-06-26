@@ -1,25 +1,18 @@
 require("../spec_helper")
 
-_        = require("lodash")
+_ = require("lodash")
 chokidar = require("chokidar")
+dependencyTree = require("dependency-tree")
 Watchers = require("#{root}lib/watchers")
-bundle = require("#{root}lib/util/bundle")
 
 describe "lib/watchers", ->
   beforeEach ->
-    @standardWatcher = @sandbox.stub({
+    @standardWatcher = sinon.stub({
       on:    ->
       close: ->
     })
 
-    @bundleWatcher = @sandbox.stub({
-      addChangeListener: ->
-      close: ->
-      getLatestBundle: ->
-    })
-
-    @sandbox.stub(chokidar, "watch").returns(@standardWatcher)
-    @sandbox.stub(bundle, "build").returns(@bundleWatcher)
+    sinon.stub(chokidar, "watch").returns(@standardWatcher)
     @watchers = Watchers()
 
   it "returns instance of watcher class", ->
@@ -36,58 +29,43 @@ describe "lib/watchers", ->
       expect(_.keys(@watchers.watchers)).to.have.length(1)
       expect(@watchers.watchers).to.have.property("/foo/bar")
 
-  context "#watchBundle", ->
+  context "#watchTree", ->
     beforeEach ->
-      @config = {}
-      @bundleWatcher.getLatestBundle.returns("latest bundle")
+      sinon.stub(dependencyTree, "toList").returns([
+        "/foo/bar"
+        "/dep/a"
+        "/dep/b"
+      ])
+      @watchers.watchTree("/foo/bar")
+
+    it "watches each file in dependency tree", ->
+      expect(chokidar.watch).to.be.calledWith("/foo/bar")
+      expect(chokidar.watch).to.be.calledWith("/dep/a")
+      expect(chokidar.watch).to.be.calledWith("/dep/b")
 
     it "stores a reference to the watcher", ->
-      @watchers.watchBundle("/foo/bar", @config)
-      expect(_.keys(@watchers.bundleWatchers)).to.have.length(1)
-      expect(@watchers.bundleWatchers).to.have.property("/foo/bar")
+      expect(_.keys(@watchers.watchers)).to.have.length(3)
+      expect(@watchers.watchers).to.have.property("/foo/bar")
+      expect(@watchers.watchers).to.have.property("/dep/a")
+      expect(@watchers.watchers).to.have.property("/dep/b")
 
-    it "does not add change listener if not specified", ->
-      expect(@bundleWatcher.addChangeListener).not.to.have.been.called
-
-    it "returns the latest bundle", ->
-      expect(@watchers.watchBundle("/foo/bar", @config)).to.equal("latest bundle")
-
-    it "adds change listener if specified", ->
-      changeListener = @sandbox.spy()
-      @watchers.watchBundle("/foo/bar", @config, { onChange: changeListener })
-      expect(@bundleWatcher.addChangeListener).to.have.been.calledWith(changeListener)
-
-  context "#removeBundle", ->
-    it "calls close on the bundle watcher", ->
-      @watchers._addBundle("/foo/bar", @bundleWatcher)
-      @watchers.removeBundle("/foo/bar")
-      expect(@bundleWatcher.close).to.be.calledOnce
-      expect(_.keys(@watchers.watchers)).to.have.length(0)
-      expect(@watchers.watchers).not.to.have.property("/foo/bar")
+    it "ignores node_modules", ->
+      expect(dependencyTree.toList.lastCall.args[0].filter("/foo/bar")).to.be.true
+      expect(dependencyTree.toList.lastCall.args[0].filter("/node_modules/foo")).to.be.false
 
   context "#close", ->
     it "removes each watched property", ->
-      watched1 = {close: @sandbox.spy()}
+      watched1 = {close: sinon.spy()}
       @watchers._add("/one", watched1)
 
-      watched2 = {close: @sandbox.spy()}
+      watched2 = {close: sinon.spy()}
       @watchers._add("/two", watched2)
 
-      watchedBundle1 = {close: @sandbox.spy()}
-      @watchers._addBundle("/bundleone", watchedBundle1)
-
-      watchedBundle2 = {close: @sandbox.spy()}
-      @watchers._addBundle("/bundletwo", watchedBundle2)
-
       expect(_.keys(@watchers.watchers)).to.have.length(2)
-      expect(_.keys(@watchers.bundleWatchers)).to.have.length(2)
 
       @watchers.close()
 
       expect(watched1.close).to.be.calledOnce
       expect(watched2.close).to.be.calledOnce
-      expect(watchedBundle1.close).to.be.calledOnce
-      expect(watchedBundle2.close).to.be.calledOnce
 
       expect(_.keys(@watchers.watchers)).to.have.length(0)
-      expect(_.keys(@watchers.bundleWatchers)).to.have.length(0)

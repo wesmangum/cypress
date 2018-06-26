@@ -1,17 +1,15 @@
 require("../spec_helper")
 
 path       = require("path")
-glob       = require("glob")
 Promise    = require("bluebird")
 cypressEx  = require("@packages/example")
+snapshot   = require("snap-shot-it")
 config     = require("#{root}lib/config")
 Project    = require("#{root}lib/project")
 scaffold   = require("#{root}lib/scaffold")
+fs         = require("#{root}lib/util/fs")
+glob       = require("#{root}lib/util/glob")
 Fixtures   = require("#{root}/test/support/helpers/fixtures")
-
-glob = Promise.promisify(glob)
-
-supportFolder = "cypress/support"
 
 describe "lib/scaffold", ->
   beforeEach ->
@@ -21,8 +19,8 @@ describe "lib/scaffold", ->
     Fixtures.remove()
 
   context ".integrationExampleName", ->
-    it "returns example_spec.js", ->
-      expect(scaffold.integrationExampleName()).to.eq("example_spec.js")
+    it "returns examples", ->
+      expect(scaffold.integrationExampleName()).to.eq("examples")
 
   context.skip ".isNewProject", ->
     beforeEach ->
@@ -94,14 +92,20 @@ describe "lib/scaffold", ->
       config.get(pristinePath).then (@cfg) =>
         {@integrationFolder} = @cfg
 
-    it "creates both integrationFolder and example_spec.js when integrationFolder does not exist", ->
-      scaffold.integration(@integrationFolder, @cfg)
-      .then =>
-        Promise.all([
-          fs.statAsync(@integrationFolder + "/example_spec.js").get("size")
-          fs.statAsync(cypressEx.getPathToExample()).get("size")
-        ]).spread (size1, size2) ->
+    it "creates both integrationFolder and example specs when integrationFolder does not exist", ->
+      Promise.join(
+        cypressEx.getPathToExamples(),
+        scaffold.integration(@integrationFolder, @cfg)
+      )
+      .spread (exampleSpecs) =>
+        Promise.join(
+          fs.statAsync(@integrationFolder + "/examples/actions.spec.js").get("size"),
+          fs.statAsync(exampleSpecs[0]).get("size"),
+          fs.statAsync(@integrationFolder + "/examples/location.spec.js").get("size"),
+          fs.statAsync(exampleSpecs[8]).get("size")
+        ).spread (size1, size2, size3, size4) ->
           expect(size1).to.eq(size2)
+          expect(size3).to.eq(size4)
 
     it "does not create any files if integrationFolder is not default", ->
       @cfg.resolved.integrationFolder.from = "config"
@@ -112,7 +116,7 @@ describe "lib/scaffold", ->
       .then (files) ->
         expect(files.length).to.eq(0)
 
-    it "does not create example_spec.js if integrationFolder already exists", ->
+    it "does not create example specs if integrationFolder already exists", ->
       ## create the integrationFolder ourselves manually
       fs.ensureDirAsync(@integrationFolder)
       .then =>
@@ -184,65 +188,60 @@ describe "lib/scaffold", ->
       .catch (err = {}) =>
         expect(err.stack).to.contain("not in the scaffolded file tree")
 
-    it "creates supportFolder and commands.js, and index.js when supportFolder does not exist", ->
-      ## todos has a _support folder so let's first nuke it and then scaffold
+    it "creates supportFolder and commands.js and index.js when supportFolder does not exist", ->
       scaffold.support(@supportFolder, @cfg)
       .then =>
-        fs.readFileAsync(@supportFolder + "/commands.js", "utf8")
-        .then (str) =>
-          expect(str).to.eq """
-          // ***********************************************
-          // This example commands.js shows you how to
-          // create various custom commands and overwrite
-          // existing commands.
-          //
-          // For more comprehensive examples of custom
-          // commands please read more here:
-          // https://on.cypress.io/custom-commands
-          // ***********************************************
-          //
-          //
-          // -- This is a parent command --
-          // Cypress.Commands.add("login", (email, password) => { ... })
-          //
-          //
-          // -- This is a child command --
-          // Cypress.Commands.add("drag", { prevSubject: 'element'}, (subject, options) => { ... })
-          //
-          //
-          // -- This is a dual command --
-          // Cypress.Commands.add("dismiss", { prevSubject: 'optional'}, (subject, options) => { ... })
-          //
-          //
-          // -- This is will overwrite an existing command --
-          // Cypress.Commands.overwrite("visit", (originalFn, url, options) => { ... })
+        Promise.join(
+          fs.readFileAsync(@supportFolder + "/commands.js", "utf8")
+          fs.readFileAsync(@supportFolder + "/index.js", "utf8")
+        ).spread (commandsContents, indexContents) ->
+          snapshot(commandsContents)
+          snapshot(indexContents)
 
-          """
+  context ".plugins", ->
+    beforeEach ->
+      pristinePath = Fixtures.projectPath("pristine")
 
-          fs.readFileAsync(@supportFolder + "/index.js", "utf8").then (str) =>
-            expect(str).to.eq """
-            // ***********************************************************
-            // This example support/index.js is processed and
-            // loaded automatically before your test files.
-            //
-            // This is a great place to put global configuration and
-            // behavior that modifies Cypress.
-            //
-            // You can change the location of this file or turn off
-            // automatically serving support files with the
-            // 'supportFile' configuration option.
-            //
-            // You can read more here:
-            // https://on.cypress.io/configuration
-            // ***********************************************************
+      config.get(pristinePath).then (@cfg) =>
+        {@pluginsFile} = @cfg
+        @pluginsFolder = path.dirname(@pluginsFile)
 
-            // Import commands.js using ES2015 syntax:
-            import './commands'
+    it "creates pluginsFile when pluginsFolder does not exist", ->
+      ## first remove it
+      fs.removeAsync(@pluginsFolder)
+      .then =>
+        scaffold.plugins(@pluginsFolder, @cfg)
+      .then =>
+        fs.readFileAsync(@pluginsFolder + "/index.js", "utf8")
+      .then (str) ->
+        snapshot(str.split('`').join('<backtick>'))
 
-            // Alternatively you can use CommonJS syntax:
-            // require('./commands')
+    it "does not create any files if pluginsFile directory already exists", ->
+      ## first remove it
+      fs.removeAsync(@pluginsFolder)
+      .then =>
+        ## create the pluginsFolder ourselves manually
+        fs.ensureDirAsync(@pluginsFolder)
+      .then =>
+        ## now scaffold
+        scaffold.plugins(@pluginsFolder, @cfg)
+      .then =>
+        glob("**/*", {cwd: @pluginsFolder})
+      .then (files) ->
+        ## ensure no files exist
+        expect(files.length).to.eq(0)
 
-            """
+    it "does not create any files if pluginsFile is not default", ->
+      @cfg.resolved.pluginsFile.from = "config"
+
+    it "does not create any files if pluginsFile is false", ->
+      @cfg.pluginsFile = false
+
+      scaffold.plugins(@pluginsFile, @cfg)
+      .then =>
+        glob("**/*", {cwd: @pluginsFile})
+      .then (files) ->
+        expect(files.length).to.eq(0)
 
   context ".fixture", ->
     beforeEach ->
@@ -307,65 +306,20 @@ describe "lib/scaffold", ->
   context ".fileTree", ->
     beforeEach ->
       todosPath = Fixtures.projectPath("todos")
-
       config.get(todosPath).then (@cfg) =>
+        @cfg.pluginsFile = path.join(@cfg.projectRoot, "cypress/plugins/index.js")
 
     it "returns tree-like structure of scaffolded", ->
-      expect(scaffold.fileTree(@cfg)).eql([
-        {
-          name: "tests"
-          children: [
-            {
-              name: "example_spec.js"
-            },{
-              name: "_fixtures"
-              children: [
-                { name: "example.json" }
-              ]
-            },{
-              name: "_support"
-              children: [
-                { name: "commands.js" }
-                { name: "index.js" }
-              ]
-            }
-          ]
-        }
-      ])
+      snapshot(scaffold.fileTree(@cfg))
 
     it "leaves out fixtures if configured to false", ->
       @cfg.fixturesFolder = false
-      expect(scaffold.fileTree(@cfg)).eql([
-        {
-          name: "tests"
-          children: [
-            {
-              name: "example_spec.js"
-            },{
-              name: "_support"
-              children: [
-                { name: "commands.js" }
-                { name: "index.js" }
-              ]
-            }
-          ]
-        }
-      ])
+      snapshot(scaffold.fileTree(@cfg))
 
     it "leaves out support if configured to false", ->
       @cfg.supportFile = false
-      expect(scaffold.fileTree(@cfg)).eql([
-        {
-          name: "tests"
-          children: [
-            {
-              name: "example_spec.js"
-            },{
-              name: "_fixtures"
-              children: [
-                { name: "example.json" }
-              ]
-            }
-          ]
-        }
-      ])
+      snapshot(scaffold.fileTree(@cfg))
+
+    it "leaves out plugins if configured to false", ->
+      @cfg.pluginsFile = false
+      snapshot(scaffold.fileTree(@cfg))

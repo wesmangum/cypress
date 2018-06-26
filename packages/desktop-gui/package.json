@@ -11,7 +11,8 @@
     "clean": "zunder clean",
     "clean-deps": "rm -rf node_modules",
     "lint": "$(bin-up eslint) --fix lib/*.js src/*.js* src/**/*.js*",
-    "test-integration": "node ../../scripts/run-cypress-tests.js"
+    "cypress:open": "node ../../scripts/start.js",
+    "cypress:run": "node ../../scripts/run-cypress-tests.js"
   },
   "files": [
     "dist",
@@ -19,6 +20,7 @@
   ],
   "devDependencies": {
     "@cypress/icons": "0.5.4",
+    "@cypress/json-schemas": "5.0.2",
     "@cypress/react-tooltip": "^0.2.2",
     "@cypress/releaser": "0.1.12",
     "bin-up": "^1.0.0",
@@ -42,6 +44,6 @@
     "react-bootstrap-modal": "3.0.1",
     "react-dom": "^15.6.1",
     "react-loader": "^2.4.0",
-    "zunder": "4.1.1"
+    "zunder": "5.6.5"
   }
 }

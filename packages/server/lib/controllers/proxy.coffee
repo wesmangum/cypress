@@ -4,16 +4,23 @@ concat        = require("concat-stream")
 through       = require("through")
 Promise       = require("bluebird")
 accept        = require("http-accept")
+debug         = require("debug")("cypress:server:proxy")
 cwd           = require("../cwd")
-logger        = require("../logger")
 cors          = require("../util/cors")
 buffers       = require("../util/buffers")
 rewriter      = require("../util/rewriter")
+blacklist     = require("../util/blacklist")
+conditional   = require("../util/conditional_stream")
 networkFailures = require("../util/network_failures")
 
 redirectRe  = /^30(1|2|3|7|8)$/
 
 zlib = Promise.promisifyAll(zlib)
+
+zlibOptions = {
+  flush: zlib.Z_SYNC_FLUSH
+  finishFlush: zlib.Z_SYNC_FLUSH
+}
 
 setCookie = (res, key, val, domainName) ->
   ## cannot use res.clearCookie because domain
@@ -32,7 +39,14 @@ setCookie = (res, key, val, domainName) ->
 
 module.exports = {
   handle: (req, res, config, getRemoteState, request) ->
-    logger.info("cookies are", req.cookies)
+    remoteState = getRemoteState()
+
+    debug("handling proxied request %o", {
+      url: req.url
+      proxiedUrl: req.proxiedUrl
+      cookies: req.cookies
+      remoteState
+    })
 
     ## if we have an unload header it means
     ## our parent app has been navigated away
@@ -40,10 +54,6 @@ module.exports = {
     ## to the clientRoute
     if req.cookies["__cypress.unload"]
       return res.redirect config.clientRoute
-
-    remoteState = getRemoteState()
-
-    logger.info({"handling request", url: req.url, proxiedUrl: req.proxiedUrl, remoteState: remoteState})
 
     ## when you access cypress from a browser which has not
     ## had its proxy setup then req.url will match req.proxiedUrl
@@ -54,6 +64,21 @@ module.exports = {
       ## requesting the cypress app and we need to redirect to the
       ## root path that serves the app
       return res.redirect(config.clientRoute)
+
+    ## if we have black listed hosts
+    if blh = config.blacklistHosts
+      ## and url matches any of our blacklisted hosts
+      if matched = blacklist.matches(req.proxiedUrl, blh)
+        ## then bail and return with 503
+        ## and set a custom header
+        res.set("x-cypress-matched-blacklisted-host", matched)
+
+        debug("blacklisting request %o", {
+          url: req.proxiedUrl
+          matched: matched
+        })
+
+        return res.status(503).end()
 
     thr = through (d) -> @queue(d)
 
@@ -69,12 +94,13 @@ module.exports = {
     isInitial = req.cookies["__cypress.initial"] is "true"
 
     wantsInjection = null
+    wantsSecurityRemoved = null
 
-    resContentTypeIsHtml = (respHeaders) ->
+    resContentTypeIs = (respHeaders, str) ->
       contentType = respHeaders["content-type"]
 
-      ## make sure the response includes text/html
-      contentType and contentType.includes("text/html")
+      ## make sure the response includes string type
+      contentType and contentType.includes(str)
 
     reqAcceptsHtml = ->
       ## don't inject if this is an XHR from jquery
@@ -109,7 +135,7 @@ module.exports = {
     getErrorHtml = (err, filePath) =>
       status = err.status ? 500
 
-      logger.info("request failed", {url: remoteUrl, status: status, err: err.message})
+      debug("request failed %o", { url: remoteUrl, status: status, error: err.stack })
 
       urlStr = filePath ? remoteUrl
 
@@ -122,23 +148,33 @@ module.exports = {
       ## turn off __cypress.initial by setting false here
       setCookies(false, wantsInjection)
 
-      logger.info "received request response"
+      encoding = headers["content-encoding"]
+
+      isGzipped = encoding and encoding.includes("gzip")
+
+      debug("received response for %o", {
+        url: remoteUrl
+        headers,
+        statusCode,
+        isGzipped
+        wantsInjection,
+        wantsSecurityRemoved,
+      })
 
       ## if there is nothing to inject then just
       ## bypass the stream buffer and pipe this back
-      if not wantsInjection
-        str.pipe(thr)
-      else
-        rewrite = (body) =>
-          rewriter.html(body.toString(), remoteState.domainName, wantsInjection)
+      if wantsInjection
+        rewrite = (body) ->
+          rewriter.html(body.toString("utf8"), remoteState.domainName, wantsInjection, config.modifyObstructiveCode)
 
-        injection = concat (body) =>
-          encoding = headers["content-encoding"]
-
+        ## TODO: we can probably move this to the new
+        ## replacestream rewriter instead of using
+        ## a buffer
+        injection = concat (body) ->
           ## if we're gzipped that means we need to unzip
           ## this content first, inject, and the rezip
-          if encoding and encoding.includes("gzip")
-            zlib.gunzipAsync(body)
+          if isGzipped
+            zlib.gunzipAsync(body, zlibOptions)
             .then(rewrite)
             .then(zlib.gzipAsync)
             .then(thr.end)
@@ -147,6 +183,45 @@ module.exports = {
             thr.end rewrite(body)
 
         str.pipe(injection)
+      else
+        ## only rewrite if we should
+        if config.modifyObstructiveCode and wantsSecurityRemoved
+          gunzip = zlib.createGunzip(zlibOptions)
+          gunzip.setEncoding("utf8")
+
+          onError = (err) ->
+            debug("failed to proxy response %o", {
+              url: remoteUrl
+              headers
+              statusCode
+              isGzipped
+              wantsInjection
+              wantsSecurityRemoved
+              err
+            })
+
+            if not res.headersSent
+              res
+              .set({
+                "X-Cypress-Proxy-Error-Message": err.message
+                "X-Cypress-Proxy-Error-Stack": JSON.stringify(err.stack)
+              })
+              .status(502)
+
+            return thr.end()
+
+          ## only unzip when it is already gzipped
+          return str
+          .pipe(conditional(isGzipped, gunzip))
+          .on("error", onError)
+          .pipe(rewriter.security())
+          .on("error", onError)
+          .pipe(conditional(isGzipped, zlib.createGzip()))
+          .on("error", onError)
+          .pipe(thr)
+          .on("error", onError)
+
+        return str.pipe(thr)
 
     endWithResponseErr = (err) ->
       ## use res.statusCode if we have one
@@ -176,7 +251,7 @@ module.exports = {
       {headers, statusCode} = incomingRes
 
       wantsInjection ?= do ->
-        return false if not resContentTypeIsHtml(headers)
+        return false if not resContentTypeIs(headers, "text/html")
 
         return false if not resMatchesOriginPolicy(headers)
 
@@ -186,11 +261,19 @@ module.exports = {
 
         return "partial"
 
+      wantsSecurityRemoved ?= do ->
+        resContentTypeIs(headers, "application/javascript")
+
       @setResHeaders(req, res, incomingRes, wantsInjection)
 
       ## always proxy the cookies coming from the incomingRes
       if cookies = headers["set-cookie"]
-        res.append("Set-Cookie", cookies)
+        ## normalize into array
+        for c in [].concat(cookies)
+          try
+            res.append("Set-Cookie", c)
+          catch err
+            ## noop
 
       if redirectRe.test(statusCode)
         newUrl = headers.location
@@ -198,7 +281,7 @@ module.exports = {
         ## set cookies to initial=true
         setCookies(true)
 
-        logger.info "redirecting to new url", status: statusCode, url: newUrl
+        debug("redirecting to new url %o", { status: statusCode, url: newUrl })
 
         ## finally redirect our user agent back to our domain
         ## by making this an absolute-path-relative redirect
@@ -246,6 +329,13 @@ module.exports = {
         opts.url = req.proxiedUrl.replace(remoteState.origin, remoteState.fileServer)
       else
         opts.url = remoteUrl
+
+      ## if we have auth headers and this request matches our origin policy
+      if (a = remoteState.auth) and resMatchesOriginPolicy()
+        ## and no existing Authentication headers
+        if not req.headers["authorization"]
+          base64 = new Buffer(a.username + ":" + a.password).toString("base64")
+          req.headers["authorization"] = "Basic #{base64}"
 
       rq = request.create(opts)
 
